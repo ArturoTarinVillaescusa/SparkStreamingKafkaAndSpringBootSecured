@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/postgres?user=postgres&password=&stringtype=varchar
+    # Para que continúe el arranque de la aplicación si falla la ejecución de las ddls de inicialización
+    # de schema.sql
+    continue-on-error: true
+  cloud:
+    stream:
+      bindings:
+        output:
+          destination: lecturas
+          content-type: application/json
+        input:
+          destination: lecturas

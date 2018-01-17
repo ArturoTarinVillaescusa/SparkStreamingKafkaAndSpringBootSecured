@@ -1,0 +1,349 @@
+:toc: macro
+:numbered:
+
+= Lecturas MS (Microservicio Lecturas)
+
+toc::[]
+
+== Introducción
+
+POC de microservicio que pretende recoger un ejemplo de uso de diferentes
+tecnologías para construcción de microservicios del proyecto WaterSupply (uso de
+Spring Boot, JDBC, Docker, etc.)
+
+La funcionalidad básica es la siguiente:
+
+* El microservicio expone un servicio REST en el endpoint "/contazara".
+* Cuando un cliente realiza un POST sobre el endpoint enviando información de una lectura,
+el servicio:
+** Insertará la lectura en base de datos
+** Enviará un mensaje con la lectura a un tópico que hemos llamado "lecturas".
+* Un StreamListener que recupera los mensajes del tópico "lecturas" y los imprime en el
+log.
+* Cuando un cliente realiza un GET sobre el endpoint, el servicio devuelve la lista de
+lecturas existente.
+
+WARNING: Esta POC es un "trabajo en progreso" y no puede considerarse una solución definitiva
+ni mucho menos aplicable a todos los casos de uso. Recoge tecnologías a utilizar en un caso
+real, pero no cubre funcionalmente ninguna épica o historia de usuario del proyecto WaterSupply.
+Los nombres de clases, métodos, etc. no deben ser tomados como referencia :-)
+
+WARNING: El proyecto es actualmente un submódulo dentro del proyecto "SparkStreaminkgKafkaAndSpringBoot"
+(sólo teníamos https://github.com/PlatformProvider/watersupply[un repositorio]). *Los scripts asumen que
+el usuario está situado justo en la raíz de este submódulo, es decir, en "lecturas-ms"*.
+
+== Construcción
+
+Para construir el proyecto (compilar, test y empaquetado del jar), desde la línea de comandos
+ejecutaremos:
+
+[source]
+----
+$ mvn clean package
+----
+
+Si además queremos construir la imagen docker:
+
+[source]
+----
+$ mvn clean package docker:build
+----
+
+NOTE: podríamos omitir `clean` o `package` si tenemos claro que no necesitamos ejecutarlos,
+claro.
+
+Para etiquetar la imagen con el nombre que incluya el repositorio y hacer push, ejecutaremos:
+----
+$ mvn docker:tag -DpushImage
+----
+
+NOTE: en la propiedad _docker.registry_ del fichero _pom.xml_ tenemos configurada la url del
+registro docker al que vamos a hacer push.
+
+== Ejecución en local
+
+Esta sección describe cómo montar y arrancar el microservicio junto con la
+infraestructura necesaria.
+
+=== Preparar la infraestructura en local
+
+La idea es tener listos y preparados contenedores docker con la infraestructura que necesita
+el microservicio. Una vez listos, podremos pararlos y arrancarlos de nuevo cuantas veces
+deseemos.
+
+==== Preparar PostgreSQL
+
+En primer lugar, necesitamos preparar la base de datos PostgreSQL. El siguiente comando
+ejecuta arranca un contenedor de nombre _postgres_, utilizando la imagen _postgres:9.5.4_,
+y arranca la BBDD (con el usuario _postgre_ y sin contraseña):
+----
+$ docker run --name watersupply-postgres -p 5432:5432 -e POSTGRES_PASSWORD= -d postgres:9.5.4
+----
+
+Como se puede observar, la base de datos se levanta en el puerto 5432.
+
+Opcionalmente, podemos comprobar que la BBDD está funcionando. Para ello, podemos
+conectarnos al contenedor, entrar en la línea de comandos de postgre usando _psql_ y
+ejecutar el comando "\d" (como la BBDD está vacía, no mostrará nada. Tras esto, salimos
+de _psql_ con "\q" y del contenedor. Sería así:
+----
+$ docker exec -it postgres /bin/bash
+root@6b59ecf5b99f:/# psql -U postgres
+psql (9.5.4)
+Type "help" for help.
+
+postgres=# \d
+No relations found.
+postgres-# \q
+root@6b59ecf5b99f:/# exit
+exit
+$
+----
+
+Una vez tenemos preparada la BBDD, podemos parar el contenedor:
+----
+$ docker stop watersupply-postgres
+----
+
+==== Preparar Kafka
+
+Lo siguiente será tener montado el broker Kafka.
+
+----
+$ docker run --name watersupply-kafka -p 2181:2181 -p 9092:9092 -d \
+--env ADVERTISED_HOST=localhost --env ADVERTISED_PORT=9092 spotify/kafka
+----
+
+Finalmente, una vez tenemos preparado el broker, podemos parar el contenedor:
+----
+$ docker stop watersupply-kafka
+----
+
+=== Arrancar y para la infraestructura
+
+Una vez tenemos preparada la infraestructura, se arranca y para fácilmente utilizando los
+script `startInfrastructure.sh` y `stopInfrastructure.sh`, respectivamente.
+
+=== Arrancar la aplicación
+
+Como requisito previo para que la aplicación pueda arrancar correctamente en local, debemos
+tener arrancada la infraestructura (ver sección anterior).
+
+Tenemos varias posibilidades para arrancar la aplicación. Por ejemplo:
+
+==== Usando el plugin de Maven para Spring Boot
+
+Para levantar el jar en local, podemos simplemente utilizar el plugin de Maven:
+----
+$ mvn spring-boot:run
+----
+
+==== Arracando la apliación empaquetada
+
+Otra opción es ejecutar el jar (tras haberlo empaquetado previamente):
+
+----
+$ java -jar target/lecturas-ms-0.0.1.jar
+----
+
+=== Probar la aplicación
+
+Una vez que tenemos la aplicación arrancada en local, podemos utilizar los servicios REST
+que expone.
+
+==== Insertar lecturas
+
+En primer lugar, podemos insertar una lectura mediante un POST al endpoint "/contazara"
+----
+$ curl -H "Content-Type: application/json" -X POST -d \
+'{"id":null, "instanteTomaLectura":1492512048.122000000, "cifra":31}' \
+http://localhost:8080/contazara
+----
+
+La aplicación devolverá un json con la lectura con el siguiente aspecto (vemos relleno el
+campo id con el id autogenerado durante la inserción):
+
+[source, json]
+----
+{"id":11,"instanteTomaLectura":1492512048.122000000,"cifra":31}j
+----
+
+Además, podemos ver en los logs del microservicio una traza indicando que se ha c
+----
+...............Recibido mensaje {"id":11,"instanteTomaLectura":1492512048.122000000,"cifra":31}
+----
+
+==== Consultar lecturas
+
+Podemos también consultar las lecturas existentes mediante un GET al endpoint "/contazara"
+----
+$ curl -H "Content-Type: application/json" -X GET http://localhost:8080/contazara
+----
+
+Devolverá un JSON con un array con las lecturas existentes en BBDD.
+
+== Aspectos cubiertos por la POC
+
+Enumeramos tecnologías empleadas y los casos que se están cubriendo en la POC:
+
+* Construcción, empaquetado y despliegue:
+** Uso de *Maven*
+** Para construir, etiquetar y publicar la imagen Docker se ha utilizado el plugin
+`docker-maven-plugin` de Spotify por su sencillez de uso.
+* Framework base:
+** Ecosistema Spring/Spring Boot
+* Evitar "boilerplate":
+** Para evitar cierto código repetitivo, se está utilizando la librería
+https://projectlombok.org/features/index.html[Lombok]. En concreto, estamos utilizando dos
+anotaciones:
+*** `@Slf4j`: genera en la clase anotada un campo "log" (de tipo `org.slf4j.Logger`) listo
+ para ser usado para trazar información.
+*** `@Data`: genera getters, settets, equals, toString y constructor por defecto en la clase
+anotada; se suele utilizar en clases que son DTOs.
+** *Importante: para que nuestro IDE se comporte correctamente debemos instalar
+el plugin de Lombok correspondiente*.
+* Acceso a BBDD:
+** Se ha preferido el uso de JDBC frente a JPA por dar más control en el acceso a base
+de datos y evitar la capa que añade JPA (evitamos la
+https://en.wikipedia.org/wiki/Object-relational_impedance_mismatch[impedancia] y tener
+que configurar adecuadamente esa tecnología).
+** A modo de prueba, se está empleando la librería `spring-data-jdbc-repository`
+para definir un repositorio (`ContazaraRepository`) extendiendo la clase `JdbcRepository`,
+pues ofrece de caja un buen número de operaciones CRUD. Si se necesita construir alguna
+consulta no cubierta, se implementaría con `JdbcTemplate`.
+** En el fichero _schema.sql_ hemos definido la creación de la tabla "LECTURAS". Spring
+Boot automáticamente intenta ejecutar este script durante el arranque. Funciona perfectamente
+en los tests, pues en cada ejecución se crea una nueva BBDD en memoria sin ninguna tabla.
+Para ejecución normal de la aplicación (contra una BBDD PostgreSQL), hemos configurado la
+propiedad `spring.datasource.continue-on-error` a _true_. De este modo, si el script falla
+(porque la tabla ya existe) el arranque de la aplicación continuará.
+* REST:
+** Hemos expuesto dos servicios REST en el endpoint "/contazara" (uno para el método POST y
+otro para GET). Para ello, hemos utilizado un controlador (clase `ContazaraController`
+anotada con `@RestController`) y mapeado las peticiones a los métodos anotados con
+`@GetMapping` y `@PostMapping`.
+** Nótese que hemos añadido como dependencia el módulo `jackson-datatype-jsr310` para poder
+mapear a json objetos que utilizan clases de `java.time`. Spring Boot se encarga del resto,
+autoconfigurando los conversores correspondientes.
+* Mensajería:
+** Se utiliza Spring Cloud Stream por su fácil uso y por su capa de abstracción del broker
+de mensajería.
+** En la clase `StreamsConfiguration` se han definido los bindings, configurando una fuente
+ y un sumidero (es decir, un canal de entrada y uno de salida) con la anotación
+`@EnableBinding({Source.class, Sink.class})`. Source y Sink son bindings por defecto que
+nos da Spring Cloud Stream y que proporcionan los canales "output" e "input".
+** El fichero de configuración `application.yaml`:
+*** Asocia tanto el canal de salida "output" como el canal de entrada "input"
+con el tópico "lecturas" del broker.
+*** Además, establece el content-type de "output" a "application/json", con lo que las
+ lecturas que se envíen por el canal se mapearán automáticamente a formato json.
+** `StreamsConfiguration` contiene además un método, `handleLectura()`, que está escuchando
+el canal "input" para procesar todos los mensajes que recibe del broker.
+** El componente `ContazaraMessageSender` utiliza el canal "output" para enviar mensajes
+ con las lecturas insertadas. Incluye además una cabecera indicando el tipo de lectura.
+* Tests:
+** El proyecto incluye tests automáticos que pueden servir de ejemplo a la hora de definir
+tests en el proyecto.
+** La clase `ContazaraJsonTest` muestra cómo hacer test específicos para comprobar la
+correcta serialización y deserialización a json de los objetos (en este caso, estamos
+probando la clase `LecturaContazara`. La anotación @JsonTest prepara la configuración
+del test, proporcionando un bean `JacksonTester` que facilita la implementación de las
+pruebas.
+** `ContazaraTest` contiene un test que podemos considerar un test de integración,
+pues estamos probando una ejecución completa de una petición REST para insertar una lectura
+(y tras esto una petición para obtener las lecturas existentes). El test:
+*** Usa un `TestRestTemplate` para realizar las peticiones REST.
+*** Emplea un `MessageCollector`, una utilidad que nos da Spring Cloud Stream que recoge
+ los mensajes que se envían a los distintos canales a lo largo del test y por tanto nos
+ permite hacer comprobaciones sobre los mensajes enviados.
+*** Para mapear a un objeto el mensaje json que se envió al canal "output" ha sido necesario
+ configurar un `ObjectMapper`, registrando además el módulo `JavaTimeModule` para que pueda
+ mapear adecuadamente la clase `Instant` (estamos construyendo el `ObjectMapper` "a mano" y
+ el constructor por defecto de Jackson no mapea aún los nuevos objetos de java.time,
+  con lo que necesario registrar el módulo indicado).
+*** El test no requiere ninguna infraestructura levantada: utiliza una base de datos embebida
+en memoria (hemos añadido la dependencia de `h2`, que se autoconfigura en el test) y el
+`MessageCollector` para recoger los mensajes enviados.
+* Infraestructura necesaria:
+** Para probar la ejecución de la aplicación real (más allá de los test automáticos),
+utilizamos dos imágenes docker: una con un PostgreSQL y otra con un Kafka.
+** En application.yaml no ha sino necesario definir la configuración de host y puerto del
+broker Kakfa y su Zookeeper, pues para ejecución en local nos sirve la configuración por
+defecto. Para más información, se puede consultar la documentación sobre
+http://docs.spring.io/spring-cloud-stream/docs/current/reference/html/_apache_kafka_binder.html#_kafka_binder_properties[propiedades de configuración del binder Kafka]
+
+== Otras consideraciones y temas pendientes
+
+Recogemos en esta sección otras consideraciones a tener en cuenta de cara a próximos pasos
+ a abordar.
+
+* Construcción, empaquetado y despliegue:
+** Una vez que esté claramente establecido el ciclo de integración y despliegue continuos,
+puede interesarnos que las tareas relacionadas con docker las liguemos con el ciclo de vida
+de Maven para que se ejecuten directamente en lugar de invocarlas de forma explícita. Ver:
+https://github.com/spotify/docker-maven-plugin#bind-docker-commands-to-maven-phases.
+** Si el plugin `docker-maven-plugin` de Spotify se queda corto, podemos considerar el de
+https://github.com/fabric8io/docker-maven-plugin[Fabric8]
+(está más activo y cubre más funcionalidad).
+** Está pendiente de establecer cuándo en el ciclo de vida se ejecutan los distintos tipos
+de validaciones de código (test unitarios, integrados, cobertura, reglas Sonar, ...), así
+como qué acciones lanzarán la integración continua o el despliegue automático de un
+servicio. Eso implicará cambios en la configuración del pom.xml de referencia.
+* Acceso a BBDD:
+** Si se detectara algún problema con la librería `spring-data-jdbc-repository`:
+*** Pasaríamos a construir los repositorios simplemente utilizando `JdbcTemplate`.
+*** Podríamos considerar el uso de Spring Data JPA para repositorios sencillos y de uso
+poco intensivo (por el ahorro en codificación al darte de caja las operaciones básicas
+sobre una entidad).
+** Está pendiente determinar si cada microservicio despliega con él su modelo SQL o si son
+artefactos separados. Esto va a tener serias implicaciones en el modelo de despliegue
+y en los procesos de despliegue.
+** Dependiendo de lo anterior, está pendiente valorar el uso de Flyway (o LiquidBase o
+similar) para migración automática de BBDD.
+* Transaccionalidad:
+** La POC no cubre aún casos en que sea necesario gestionar transaccionalidad en el acceso
+a datos (en principio muy sencillo utilizando anotaciones en los métodos en las clases
+Service).
+** Tampoco cubre la gestión de grano fino en el consumo de mensajes en casos en que
+necesitamos que no se notifique el consumo de un mensaje (ACK) si ha habido un error durante
+su procesado.
+** REST:
+*** La POC no lo cubre, pero el consumo de servicios los haríamos en principio con
+`RestTemplate` o `AsyncRestTemplate` (se podrían valorar otras opciones, como Feign...).
+** Load Balanging:
+*** En principio, no se utilizará Ribbon para balanceo en cliente de las peticiones, pues
+PlatformProvider EOS ya lo da de caja (a través de Minuteman y/o MarathonLb... e incluso MesosDNS,
+pues la ip se resolvería siempre en cada petición), liberando a los servicios de esa
+responsabilidad.
+** Mensajería:
+*** La POC utiliza Json por su interoperabilidad y sencillez. Si se comprueba que la
+ serialización puede ser un cuello de botella, puede valorarse utilizar un mecanismo de
+ serialización diferente (Kryo, Avro, ...). La documentación de Spring Cloud Stream indica:
+ _"If no content-type property is set on an outbound channel, Spring Cloud Stream
+ will serialize the payload using a serializer based on the Kryo serialization framework"_.
+** Service Discovery:
+*** Según lo indicado en las reuniones con "Producto", para consumir otros microservicios
+de la plataforma bastaría con utilizar las urls con las que se registran los servicios.
+Por ahora no sería necesario incluir ningún cliente de descubrimiento (como Consul).
+*** Queda pendiente ver si desde arquitectura finalmente se establece alguna recomendación
+respecto a si finalmente necesitaremos utilizar un cliente de Consul para descubrimiento de
+urls de servicios, bases de datos, etc.
+** Configuración:
+*** Dado que lo que se propone es el uso de
+https://github.com/hashicorp/consul-template[consulTemplate] para inyectar la configuración
+como variables de entorno, no es necesario que el microservicio tenga que hacer uso de
+ninguna librería (como Spring Cloud config).
+* Productividad y reutilización:
+** Para evitar replicación de trabajo y facilitar arranque y mantenimiento de
+los microservicios, se recomienda desarrollar algunas librerías y artefactos comunes.
+** Ejemplos:
+*** Crear un watersupply-starter-parent: si vamos a tener una configuración de referencia y con cierta
+ complejidad de los pom.xml de nuestros servicios, convendrá tener un artefacto parent
+ (al estilo del spring-boot-starter-parent) que configure las gestión de dependencias y
+ los plugins. Los microservicios simplemente tendrían que heredar de ese parent toda esa
+ configuración-
+*** Libreriás de utilidad: al detectar necesidades repetidas en varios servicios, se debería
+valorar la conveniencia de implementar la funcionalidad en una librería de utilidad,
+reutilizable por cualquier servicio; deberían contener automatizaciones, validaciones comunes,
+clases base, etc... pero no una funcionalidad de negocio concreta (eso debería estar en el
+microservicio correspondiente).

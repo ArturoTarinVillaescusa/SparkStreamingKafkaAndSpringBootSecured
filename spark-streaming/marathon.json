@@ -1,0 +1,65 @@
+{
+  "volumes": null,
+  "id": "/aguastreaming",
+  "cmd": null,
+  "args": null,
+  "user": null,
+  "env": {
+    "VAULT_HOST": "vault.service.watersupply.labs.platformprovider.com",
+    "KERBEROS_KADMIN_HOST": "ldap.labs.platformprovider.com",
+    "SPARK_EXECUTOR_MEMORY": "1G",
+    "APP_CONF_KAFKA_TOPIC": "lecturas",
+    "KERBEROS_REALM": "WATERSUPPLY.PLATFORMPROVIDER.COM",
+    "APP_CONF_KAFKA_BOOTSTRAP_SERVERS": "broker0.confluent-kafka-sec.mesos:9092",
+    "VAULT_TOKEN": "d4799429-5e49-fe8c-0093-51bd8d947b1d",
+    "MARATHON_LB": "marathon-lb.marathon.mesos",
+    "HADOOP_SECURITY_AUTH_TO_LOCAL": "'RULE:[1:$1@$0](.*@WATERSUPPLY.PLATFORMPROVIDER.COM)s/@WATERSUPPLY.PLATFORMPROVIDER.COM//       RULE:[2:$1@$0](.*@WATERSUPPLY.PLATFORMPROVIDER.COM)s/@WATERSUPPLY.PLATFORMPROVIDER.COM//       DEFAULT'",
+    "SPARK_MAX_CORES": "2",
+    "HDFS_FS_DEFAULTFS": "172.31.128.16:8020",
+    "HDFS_HADOOP_HTTP_FILTER_INITIALIZERS": "'RULE:[1:$1@$0](.*@WATERSUPPLY.PLATFORMPROVIDER.COM)s/@WATERSUPPLY.PLATFORMPROVIDER.COM//       RULE:[2:$1@$0](.*@WATERSUPPLY.PLATFORMPROVIDER.COM)s/@WATERSUPPLY.PLATFORMPROVIDER.COM//       DEFAULT'",
+    "KERBEROS_KDC_HOST": "ldap.labs.platformprovider.com"
+  },
+  "instances": 1,
+  "cpus": 1,
+  "mem": 128,
+  "disk": 0,
+  "gpus": 0,
+  "executor": null,
+  "constraints": null,
+  "fetch": null,
+  "storeUrls": null,
+  "backoffSeconds": 1,
+  "backoffFactor": 1.15,
+  "maxLaunchDelaySeconds": 3600,
+  "container": {
+    "docker": {
+      "image": "bootstrap.labs.platformprovider.com:5000/watersupply/spark-streaming:1.7-SNAPSHOT",
+      "forcePullImage": true,
+      "privileged": false,
+      "network": "HOST"
+    }
+  },
+  "healthChecks": null,
+  "readinessChecks": null,
+  "dependencies": null,
+  "upgradeStrategy": {
+    "minimumHealthCapacity": 1,
+    "maximumOverCapacity": 1
+  },
+  "labels": null,
+  "acceptedResourceRoles": null,
+  "residency": null,
+  "secrets": null,
+  "taskKillGracePeriodSeconds": null,
+  "portDefinitions": [
+    {
+      "protocol": "tcp",
+      "port": 10106
+    },
+    {
+      "protocol": "tcp",
+      "port": 10108
+    }
+  ],
+  "requirePorts": false
+}

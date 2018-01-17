@@ -1,0 +1,26 @@
+#!/bin/sh
+
+#define parameters which are passed in.
+DEBUG_LEVEL_CONSOLE=$1
+DEBUG_LEVEL_FILE=$2
+
+#define the template.
+cat  << EOF
+log4j.rootCategory=ALL, console, file
+#log4j.logger.org.hibernate.SQL=TRACE, console
+
+log4j.appender.console.Threshold=$DEBUG_LEVEL_CONSOLE
+log4j.appender.console=org.apache.log4j.ConsoleAppender
+log4j.appender.console.target=System.out
+log4j.appender.console.layout=org.apache.log4j.PatternLayout
+log4j.appender.console.layout.ConversionPattern=[%d{ISO8601}][%-5p][%c{1}:%L] - %msg%n
+
+
+# Direct log messages to a log file
+log4j.appender.file=org.apache.log4j.DailyRollingFileAppender
+log4j.appender.file.Threshold=$DEBUG_LEVEL_FILE
+log4j.appender.file.File=/etc/sds/dg-job/application.log
+log4j.appender.file.DatePattern='.'yyyy-MM-dd
+log4j.appender.file.layout=org.apache.log4j.PatternLayout
+log4j.appender.file.layout.ConversionPattern=[%d{ISO8601}][%-5p][%t][%c:%L] - %msg%n
+EOF

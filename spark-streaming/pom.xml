@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<parent>
+		<artifactId>SparkStreaminkgKafkaAndSpringBoot</artifactId>
+		<groupId>es.aguas</groupId>
+		<version>1.0-SNAPSHOT</version>
+	</parent>
+	<modelVersion>4.0.0</modelVersion>
+
+	<artifactId>spark-streaming</artifactId>
+
+
+	<version>2.1.0-SNAPSHOT</version>
+
+	<name>spark-streaming</name>
+	<url>http://maven.apache.org</url>
+	<description>Recepción cliente spark streaming, almacenamiento en hdfs y posgres</description>
+
+	<properties>
+		<maven.compiler.source>1.8</maven.compiler.source>
+		<maven.compiler.target>1.8</maven.compiler.target>
+		<encoding>UTF-8</encoding>
+		<scala.version>2.11.8</scala.version>
+		<scala.tools.version>2.11</scala.tools.version>
+		<scala.compat.version>2.11</scala.compat.version>
+
+		<spark.version>2.1.0</spark.version>
+		<!--spark-streaming-kafka-compat.version>0-8_2.11</spark-streaming-kafka-compat.version-->
+		<spark-streaming-kafka-compat.version>0-10_2.11</spark-streaming-kafka-compat.version>
+		<spark-streaming-kafka.version>2.1.0</spark-streaming-kafka.version>
+		<spark-xml.version>0.4.1</spark-xml.version>
+		<spark-csv.version>1.5.0</spark-csv.version>
+		<!--<kafka.clients.version>0.8.2.1</kafka.clients.version>-->
+		<!--<kafka.clients.version>0.10.0.0</kafka.clients.version>-->
+		<log4j.version>1.2.17</log4j.version>
+		<mysql.version>6.0.5</mysql.version>
+		<postgresql.version>9.3-1100-jdbc41</postgresql.version>
+		<spark.scope>provided</spark.scope>
+		<commons-net.version>3.5</commons-net.version>
+		<json.version>20140107</json.version>
+		<univocity.version>2.2.3</univocity.version>
+		<spring-boot.version>1.5.2.RELEASE</spring-boot.version>
+
+		<docker.imageName>watersupply/${project.artifactId}</docker.imageName>
+		<!-- Docker registry del cluster 'ref-arq'-->
+		<!--<docker.registry>paas-bootstrap.ref-arq.lab.platformprovider.com:5000</docker.registry>-->
+		<!-- Docker registry del cluster 'watersupply-poc'-->
+		<docker.registry>bootstrap.labs.platformprovider.com:5000</docker.registry>
+
+	</properties>
+
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.scala-tools</groupId>
+				<artifactId>maven-scala-plugin</artifactId>
+				<executions>
+					<execution>
+						<goals>
+							<goal>compile</goal>
+							<goal>testCompile</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<sourceDir>src/main/scala</sourceDir>
+					<jvmArgs>
+						<jvmArg>-Xms1024m</jvmArg>
+						<jvmArg>-Xmx1024m</jvmArg>
+					</jvmArgs>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>com.spotify</groupId>
+				<artifactId>docker-maven-plugin</artifactId>
+				<version>0.4.11</version>
+				<configuration>
+					<!-- docker:build utiliza 'imageName', mientras que docker:tag utiliza 'image' y 'newName' -->
+					<imageName>${docker.imageName}</imageName>
+					<image>${docker.imageName}</image>
+					<newName>${docker.registry}/${docker.imageName}:${project.version}</newName>
+					<dockerDirectory>src/main</dockerDirectory>
+					<resources>
+						<resource>
+							<targetPath>/</targetPath>
+							<directory>${project.build.directory}</directory>
+							<include>${project.build.finalName}.jar</include>
+						</resource>
+					</resources>
+					<imageTags>
+						<imageTag>${project.version}</imageTag>
+						<imageTag>latest</imageTag>
+					</imageTags>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>2.3</version>
+				<configuration>
+					<filters>
+						<filter>
+							<artifact>*:*</artifact>
+							<excludes>
+								<exclude>META-INF/*.SF</exclude>
+								<exclude>META-INF/*.DSA</exclude>
+								<exclude>META-INF/*.RSA</exclude>
+							</excludes>
+						</filter>
+					</filters>
+				</configuration>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+	<dependencies>
+
+		<dependency>
+			<groupId>org.scala-lang</groupId>
+			<artifactId>scala-reflect</artifactId>
+			<version>${scala.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.scala-lang</groupId>
+			<artifactId>scala-library</artifactId>
+			<version>${scala.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>log4j</groupId>
+			<artifactId>log4j</artifactId>
+			<version>${log4j.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.spark</groupId>
+			<artifactId>spark-core_${scala.compat.version}</artifactId>
+			<version>${spark.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.spark</groupId>
+			<artifactId>spark-sql_${scala.compat.version}</artifactId>
+			<version>${spark.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.apache.spark/spark-streaming-kafka-0-10_2.11 -->
+		<dependency>
+			<groupId>org.apache.spark</groupId>
+			<artifactId>spark-streaming-kafka-${spark-streaming-kafka-compat.version}</artifactId>
+			<version>${spark-streaming-kafka.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.kafka</groupId>
+			<artifactId>kafka-clients</artifactId>
+			<version>0.10.0.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.databricks</groupId>
+			<artifactId>spark-xml_${scala.compat.version}</artifactId>
+			<version>${spark-xml.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.databricks</groupId>
+			<artifactId>spark-csv_${scala.compat.version}</artifactId>
+			<version>${spark-csv.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.spark</groupId>
+			<artifactId>spark-catalyst_${scala.compat.version}</artifactId>
+			<version>${spark.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.spark</groupId>
+			<artifactId>spark-hive_${scala.compat.version}</artifactId>
+			<version>${spark.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.spark</groupId>
+			<artifactId>spark-streaming_${scala.compat.version}</artifactId>
+			<version>${spark.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/mysql/mysql-connector-java -->
+		<dependency>
+			<groupId>mysql</groupId>
+			<artifactId>mysql-connector-java</artifactId>
+			<version>${mysql.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<version>${postgresql.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.typesafe</groupId>
+			<artifactId>config</artifactId>
+			<version>1.3.0</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/commons-net/commons-net -->
+		<dependency>
+			<groupId>commons-net</groupId>
+			<artifactId>commons-net</artifactId>
+			<version>${commons-net.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.json</groupId>
+			<artifactId>json</artifactId>
+			<version>${json.version}</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/com.univocity/univocity-parsers -->
+		<dependency>
+			<groupId>com.univocity</groupId>
+			<artifactId>univocity-parsers</artifactId>
+			<version>${univocity.version}</version>
+		</dependency>
+
+		<!--&lt;!&ndash; https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-hdfs &ndash;&gt;-->
+		<!--<dependency>-->
+			<!--<groupId>org.apache.hadoop</groupId>-->
+			<!--<artifactId>hadoop-hdfs</artifactId>-->
+			<!--<version>2.7.4</version>-->
+		<!--</dependency>-->
+
+
+	</dependencies>
+
+
+</project>

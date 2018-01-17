@@ -1,0 +1,788 @@
+:toc: macro
+:numbered:
+
+= Lecturas
+
+toc::[]
+
+== Introducción
+
+POC para extracción, transformación y almacenamiento de lecturas que llegan de distintas fuentes y consulta de los datos almacenados,
+utilizando Crossdata.
+
+Los datos de origen de las lecturas pueden provenir de:
+
+* Servidores FTP
+* Bases de datos
+* ...
+
+Una vez se extraen los datos se generan mensajes Json, cuyo destino puede ser:
+
+* Un tópico de Kafka: este destino recibe vectores de lecturas en formato Json, que serán procesados por un
+cliente Spark Streaming conectado a su tópico correspondiente
+
+Los procesos Spark Streaming que actuan como cliente de Kafka extraen los datos de los mensajes Json formando Dataframes,
+cuyo destino es:
+
+** Una tabla de PostGres de lecturas
+** HDFS en formato Parquet
+** Un endpoint Rest del microservicio lecturas-ms-principal.
+
+   La funcionalidad del microservicio está descrita en https://github.com/PlatformProvider/watersupply/tree/master/lecturas-ms
+
+Queda pendiente aplicar Machine Learning a estos Dataframes. A falta de profundizar más en las necesidades concretas del
+cliente, es posible que necesitaremos aplicar:
+
+** Clustering, para identificar distintas tipologías de los patrones buscados, en el área de fugas y fraude
+
+** Regresion, para detectar qué lecturas se escapan de lo que sería una lectura dentro de los parámetros de normalidad
+
+
+
+== Construcción
+
+Para construir el proyecto (compilar, test y empaquetado del jar), desde la línea de comandos
+ejecutaremos:
+
+[source]
+----
+$ mvn clean package
+----
+
+Si además queremos construir la imagen docker:
+
+[source]
+----
+$ mvn clean package docker:build
+----
+
+NOTE: podríamos omitir `clean` o `package` si tenemos claro que no necesitamos ejecutarlos,
+claro.
+
+Para etiquetar la imagen con el nombre que incluya el repositorio y hacer push, ejecutaremos:
+----
+$ mvn docker:tag -DpushImage
+----
+
+NOTE: en la propiedad _docker.registry_ del fichero _pom.xml_ tenemos configurada la url del
+registro docker al que vamos a hacer push.
+
+== Ejecución en local
+
+Esta sección describe cómo montar y arrancar el microservicio junto con la
+infraestructura necesaria.
+
+=== Preparar la infraestructura en local
+
+La idea es tener listos y preparados contenedores docker con la infraestructura que necesita
+esta PoC. Una vez listos, podremos pararlos y arrancarlos de nuevo cuantas veces
+deseemos.
+
+==== Preparar el servidor de FTP
+
+En primer lugar, necesitamos preparar un servidor de FTP en local que contendrá los archivos de lecturas.
+Para ello descargamos una máquina de FTP con el siguiente comando:
+
+----
+docker run -d -v <host folder>:/home/vsftpd \
+                -p 20:20 -p 21:21 -p 47400-47470:47400-47470 \
+                -e FTP_USER=<username> \
+                -e FTP_PASS=<password> \
+                -e PASV_ADDRESS=<ip address of your server> \
+                --name ftp \
+                --restart=always bogem/ftp
+----
+
+Por ejemplo, en mi máquina he utilizado estos valores:
+
+----
+$ docker run -d -v /home/atarin/Telelecturas:/home/vsftpd \
+                  -p 20:20 -p 21:21 -p 47400-47470:47400-47470 \
+                  -e FTP_USER=arturo \
+                  -e FTP_PASS=arturo \
+                  -e PASV_ADDRESS=172.19.1.6 \
+                  --name watersupply-ftp \
+                  --restart=always bogem/ftp
+----
+
+Comprobamos que tenemos acceso desde la URL:
+
+----
+ftp://localhost/Telelecturas
+
+usuario: arturo
+clave: arturo
+----
+
+También desde línea de comando:
+
+----
+$ ftp -p 172.19.1.6 21
+Connected to 172.19.1.6.
+220 (vsFTPd 3.0.3)
+Name (172.19.1.6:atarin): arturo
+331 Please specify the password.
+Password:
+230 Login successful.
+Remote system type is UNIX.
+Using binary mode to transfer files.
+
+ftp> dir
+227 Entering Passive Mode (172,19,1,6,185,107).
+150 Here comes the directory listing.
+drwxrwxr-x   10 ftp      ftp          4096 May 04 09:35 Telelecturas
+226 Directory send OK.
+
+ftp> cd Telelecturas
+
+ftp> dir
+227 Entering Passive Mode (172,19,1,6,185,42).
+150 Here comes the directory listing.
+drwxr-xr-x    2 ftp      ftp          4096 Jan 02 10:18 ABERING
+drwxr-xr-x    2 ftp      ftp          4096 Apr 10 15:16 CONTAZARA
+drwxr-xr-x    2 ftp      ftp          4096 Feb 13 16:10 CONTAZARA_PRUEBA
+-rw-rw-r--    1 ftp      ftp      629212973 Apr 24 11:06 Datos prueba Itron xml-20170424T105307Z-001.zip
+-rw-rw-r--    1 ftp      ftp      93716956 Apr 24 11:49 Datos prueba Sappel csv-20170424T113812Z-001.zip
+-rw-rw-r--    1 ftp      ftp      42332077 Apr 24 11:45 Datos prueba Sensus, Elster, Arson-20170424T114250Z-001.zip
+drwxr-xr-x    4 ftp      ftp          4096 Mar 09 16:34 IKOR
+drwxrwxr-x    2 ftp      ftp          4096 Feb 14 15:27 IKOR_PRUEBA
+drwxr-xr-x    5 ftp      ftp          4096 Apr 24 11:41 ITRON
+drwxr-xr-x    5 ftp      ftp          4096 Apr 24 11:50 SAPPEL
+drwxr-xr-x    3 ftp      ftp          4096 Apr 24 11:49 SENSUS_ELSTER_ARSON
+226 Directory send OK.
+----
+
+==== Preparar PostgreSQL
+
+En primer lugar, necesitamos preparar la base de datos PostgreSQL. El siguiente comando
+ejecuta arranca un contenedor de nombre _postgres_, utilizando la imagen _postgres:9.5.4_,
+y arranca la BBDD (con el usuario _postgres_ y sin contraseña):
+----
+$ docker run --name watersupply-postgres -p 5432:5432 -e POSTGRES_PASSWORD= -d postgres:9.5.4
+----
+
+Como se puede observar, la base de datos se levanta en el puerto 5432.
+
+Opcionalmente, podemos comprobar que la BBDD está funcionando. Para ello, podemos
+conectarnos al contenedor, entrar en la línea de comandos de postgre usando _psql_ y
+ejecutar el comando "\d" (como la BBDD está vacía, no mostrará nada. Tras esto, salimos
+de _psql_ con "\q" y del contenedor. Sería así:
+----
+$ sudo docker exec -it watersupply-postgres /bin/bash
+root@6b59ecf5b99f:/# psql -U postgres
+psql (9.5.4)
+Type "help" for help.
+
+postgres=# \d
+No relations found.
+postgres-# \q
+root@6b59ecf5b99f:/# exit
+exit
+$
+----
+
+Una vez tenemos preparada la BBDD, podemos parar el contenedor:
+----
+$ docker stop watersupply-postgres
+----
+
+==== Preparar HDFS
+
+Spark Streaming requiere en producción de la existencia de un servidor de HDFS en cluster para hacer checkpoint, está totalmente
+  desaconsejado el uso de servidores compartidos tipo NFS. Para nuetro entorno de desarrollo local vamos a utilizar un servidor con un
+  único nodo, que aprovecharemos para el almacenamiento en HDFS con formato Parquet de los datos que vamos a procesar.
+
+----
+$ $ docker run --name watersupply-hdfs -p 22022:22 -p 8020:8020 -p 50010:50010 -p 50020:50020 -p 50070:50070 -p 50075:50075 -d sequenceiq/hadoop-docker
+----
+
+Una vez arrancado el servidor, podemos navegar en el repositorio a través de la url:
+
+----
+http://localhost:50070/explorer.html#/
+----
+
+También desde el mismo servidor, mediante el comando 'hdfs':
+
+----
+$ sudo docker exec -it watersupply-hdfs /bin/bash
+
+bash-4.1# ./usr/local/hadoop-2.7.0/bin/hdfs dfs -ls /
+Found 1 items
+drwxr-xr-x   - root supergroup          0 2015-07-22 11:17 /user
+----
+
+Aprovechamos esta sesión para dar permisos de escritura a cualquier usuario
+
+WARNING: este comando sólo se usará en nuestros entornos de desarrollo local.
+En producción debe hacerse una tarea estricta de administración de usuarios, roles y permisos,
+acorde a las exigencias de negocio de WaterSupply
+
+----
+bash-4.1# /usr/local/hadoop-2.7.0/bin/hdfs dfs -chmod 777 /
+----
+
+
+Una vez tenemos preparado el broker, podemos parar el contenedor:
+
+----
+$ docker stop watersupply-hdfs
+----
+
+==== Preparar Kafka
+
+Lo siguiente será tener montado el broker Kafka.
+
+----
+$ docker run --name watersupply-kafka -p 2181:2181 -p 9092:9092 -d \
+--env ADVERTISED_HOST=localhost --env ADVERTISED_PORT=9092 spotify/kafka
+----
+
+Si descargamos Kafka en nuestro pc local podemos listar las colas, instanciar productores y consumidores con estos comandos:
+
+----
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-topics.sh --list --zookeeper localhost:2181
+__consumer_offsets
+lecturas
+topicocontazara
+topicoitron
+
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic topicoitron < ~/Telelecturas/Telelecturas/IKOR_PRUEBA/V4.txt
+
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic topicoitron from-beginning
+...
+
+IDD: 9411
+TIPO: 80
+REBTS: 335
+%BAT: 62
+VBAT: 3609
+FDISP: 0
+FCOMM: 0
+FHIGH: 0
+FLOW: 0
+D->C: 10507 / 0
+C->D: 10507 / 0
+NLECT: 0
+----
+
+Una vez tenemos preparado el broker, podemos parar el contenedor:
+----
+$ docker stop watersupply-kafka
+----
+
+=== Arrancar y para la infraestructura
+
+Una vez tenemos preparada la infraestructura, se arranca y para fácilmente utilizando los
+script `startInfrastructure.sh` y `stopInfrastructure.sh`, respectivamente.
+
+=== Ejecución en local del ciclo completo
+
+Vamos a verificar en local que el ciclo completo funciona correctamente. Para ello seguimos estos pasos:
+
+1) Arrancar la infraestructura
+
+----
+startInfrastructure.sh
+----
+
+2) Arrancar el microservicio principal
+
+Desde Maven:
+
+$ mvn spring-boot:run
+
+O desde línea de comando:
+
+----
+$ java -jar target/lecturas-ms-0.0.1.jar
+----
+
+4) Lanzar dos clientes de Kafka, uno para la cola 'lecturas' y otro para la cola 'lecturascontazara'
+
+----
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic lecturas from-beginning
+
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic lecturascontazara from-beginning
+----
+
+5) Lanzar el consumidor Spark Streaming de Kafka de mensajes de Contazara
+
+----
+$ java -jar target/lecturas-1.0-SNAPSHOT.jar -classpath lecturas.consumers.ParseContazaraJsonsArrivingFromKafkaStream
+----
+
+6) Lanzar el parseador de archivos de Contazara / productor de vectores de mensajes Json de contazara en Kafka
+
+----
+$ java -jar target/lecturas-1.0-SNAPSHOT.jar -classpath lecturas.producers.ProcesaFtpDeLecturasItron
+----
+
+7) Comprobar que las colas están recibiendo los mensajes
+
+----
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic lecturas from-beginning
+...
+{"id":"","instanteTomaLectura":"2016-12-30T00:00:00Z","cifra":"0"}
+
+$ ~/Descargas/kafka_2.10-0.9.0.1/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic lecturascontazara from-beginning
+...
+{"id":"","instanteTomaLectura":"2016-12-30T00:00:00Z","cifra":"0"}
+----
+
+7) Comprobar que las lecturas que pasan por el microservicio se están almacenando en la base de datos
+
+----
+$ sudo docker exec -it watersupply-postgres /bin/bash
+
+root@watersupply-postgres:/# psql -U postgres
+psql (9.5.4)
+Type "help" for help.
+
+postgres=# select count(*) from lecturas;
+ count
+--------
+ 163169
+(1 row)
+----
+
+7) Comprobar que las lecturas que pasan por el proceso de Spark Streaming se están almacenando en la base de datos
+
+----
+root@watersupply-postgres:/# psql -U postgres
+psql (9.5.4)
+Type "help" for help.
+
+postgres=# select count(*) from lecturas_contazara;
+ 163169
+(1 row)
+----
+
+8) Comprobar que también se están almacenando en HDFS
+
+----
+http://10.32.0.6:50070/explorer.html#/lecturas/parquet.lecturas_contazara
+----
+
+9) Usar Crossdata para consultar los datos de HDFS y de Postgres
+
+----
+$ java -jar target/lecturas-1.0-SNAPSHOT.jar -classpath test.scala.ConsultasCrossdata.scala
+----
+
+== Ejecución en el entorno de PlatformProvider PaaS (Plataforma de pruebas)
+
+Se instaló un entorno en la nube para soportar nuestros desarrollos, aquí tenemos los detalles del proceso:
+
+https://docs.google.com/document/d/1wpL5KGAchwxMgsVWWHgtHWFiuBLoLZgzOAwH_SnSenU/edit
+
+Las url de acceso son:
+
+DC/OS:
+
+https://master-1.node.ref-arq.paas.labs.platformprovider.com/#/login
+
+admin p**o
+
+Mesos:
+
+https://master-1.node.ref-arq.paas.labs.platformprovider.com/mesos/#/
+
+HAProxy
+
+http://51.15.141.211:9090/haproxy?stats#stats/Backend
+
+=== Despliegues en el entorno de PlatformProvider PaaS (Plataforma de pruebas)
+
+Para subir una máquina al Registry de PlatformProvider PaaS e instanciarla en el universo de PaaS, ya sea el privado o el público
+ hemos de seguir estos pasos:
+
+
+0) Este paso sólo se hará la primera vez, para preparar un servidor de FTP que vamos a subir al Registry, y que instanciaremos
+en el universo privado como un servicio:
+
+* Creamos una nueva máquina que servirá como servidor de ftp, llamada 'ftp-paas'
+
+[source]
+----
+$ docker run -d --name watersupply-ftp-cloud -p 21:21 -p 30000-30009:30000-30009 -e "PUBLICHOST=localhost" stilliard/pure-ftpd:hardened
+----
+
+* Damos de alta a un usuario
+
+[source]
+----
+$ sudo docker exec -it watersupply-ftp-cloud /bin/bash
+
+root@watersupply-ftp-cloud:/# pure-pw useradd arturo -f /etc/pure-ftpd/passwd/pureftpd.passwd -m -u ftpuser -d /home/ftpusers/arturo
+Password:
+Enter it again:
+----
+
+* Subimos los archivos de lecturas a la carpeta compartida y los descomprimimos
+
+[source]
+----
+
+$ ~/Telelecturas/Telelecturas$ sudo docker cp Telelecturas.zip c0ebd984a6ac:/home/ftpusers/arturo/Telelecturas
+
+$ ~/Telelecturas/Telelecturas$ sudo docker cp /home/atarin/Telelecturas.zip watersupply-ftp-cloud:/home/ftpusers/arturo/Telelecturas
+
+$ sudo docker exec -it watersupply-ftp-cloud /bin/bash
+
+root@watersupply-ftp-cloud:/# cd /home/ftpusers/arturo/Telelecturas/
+
+root@watersupply-ftp-cloud:/home/ftpusers/arturo/Telelecturas# unzip Telelecturas.zip
+
+----
+
+* Verificamos que los archivos están accesibles
+
+[source]
+----
+ftp://localhost/Telelecturas
+----
+
+* Tageamos
+
+[source]
+----
+
+$ docker images | grep ftpd
+stilliard/pure-ftpd                                                        hardened            ef5f8601aca5        6 weeks ago         438.7 MB
+
+$ docker tag stilliard/pure-ftpd:hardened paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp
+
+atarin@atarin:~/Telelecturas/Telelecturas$ docker images | grep ftp
+paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp                      latest              ef5f8601aca5        6 weeks ago         438.7 MB
+stilliard/pure-ftpd                                                        hardened            ef5f8601aca5        6 weeks ago         438.7 MB
+
+----
+
+* Subimos el servidor de ftp al registry de PlatformProvider PaaS
+
+[source]
+----
+$ docker push paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp
+  The push refers to a repository [paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp]
+  9894ffbb1c97: Pushed
+  489451c51aea: Pushed
+  bddd0b9b1791: Pushed
+  380e871c2613: Pushed
+  f1323c1c1b41: Pushed
+  3f651b802b58: Pushed
+  9a903ca81ec4: Pushed
+  5432287cb166: Pushed
+  14bf5f830371: Pushed
+  b35f1b68a7dd: Pushed
+  a47d5b77dbc2: Pushed
+  d40b0f3475b5: Pushed
+  2268bef4c542: Pushed
+  d58caf9fe717: Pushed
+  d60ccff9a94a: Pushed
+  5d6cbe0dbcf9: Pushed
+  latest: digest: sha256:1f3cc29bf2fddd36dc843a32b0117d1376fbe5189216f5349b0bd23c2d9e5957 size: 3671
+----
+
+* Verifico que la nueva imagen ha sido subida al Registry:
+
+[source]
+----
+$ curl -X GET  http://paas-bootstrap.ref-arq.lab.platformprovider.com:5000/v2/watersupply/ftp/tags/list
+  {"name":"watersupply/ftp","tags":["latest"]}
+----
+
+* Creamos un servicio con el servidor de ftp
+
+[source]
+----
+https://master-1.node.ref-arq.paas.labs.platformprovider.com   >  Services  > Image: "paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp:latest"
+
+{
+  "id": "/SparkStreamingKafkaAndSpringBoot/servidorftp",
+  "cmd": null,
+  "cpus": 1,
+  "mem": 128,
+  "disk": 0,
+  "instances": 1,
+  "executor": null,
+  "fetch": null,
+  "constraints": null,
+  "acceptedResourceRoles": null,
+  "user": null,
+  "container": {
+    "docker": {
+      "image": "paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp:latest",
+      "forcePullImage": false,
+      "privileged": false,
+      "network": "HOST"
+    }
+  },
+  "labels": null,
+  "healthChecks": null,
+  "env": null,
+  "portDefinitions": [
+    {
+      "protocol": "tcp",
+      "port": 0
+    }
+  ]
+}
+----
+
+WARNING: no sabemos cuando va a terminar de desplegar, porque la máquina está al 100% de CPU. Alguien está intentando desplegar
+un Tomcat, pero ya lleva más de un día en marcha y no ha terminado todavía.
+
+[source]
+----
+
+paas@paas-private1:/home/paas-$ top
+
+top - 10:30:11 up 15 days,  2:01,  1 user,  load average: 94,00, 93,96, 93,87
+Tasks: 252 total,   1 running, 251 sleeping,   0 stopped,   0 zombie
+%Cpu(s): 99,1 us,  0,7 sy,  0,0 ni,  0,0 id,  0,0 wa,  0,0 hi,  0,0 si,  0,2 st
+
+  PID USER      PR  NI    VIRT    RES    SHR S  %CPU %MEM     TIME+ COMMAND
+24208 root      20   0  827700  19608   2632 S 103,7  0,0   1771:07 minerd
+24197 root      20   0  827700  19696   2720 S 102,3  0,0   1771:00 minerd
+24134 root      20   0  827700  19616   2640 S 100,7  0,0   1770:01 minerd
+24182 root      20   0  827700  19612   2628 S  98,3  0,0   1770:28 minerd
+23822 root      20   0  827700  19688   2712 S  98,0  0,0   1770:42 minerd
+25020 root      20   0  827700  19596   2612 S  96,3  0,0   1766:46 minerd
+24168 root      20   0  827700  19596   2620 S  95,7  0,0   1770:37 minerd
+...
+----
+
+
+* Comprobamos que la creación del servicio ha actualizado la imagen en el agente privado y que está corriendo un contenedor de FTP:
+
+[source]
+----
+
+$ ssh paas@paas-bootstrap.ref-arq.lab.platformprovider.com -i /home/atarin/.ssh/id_rsa.paas -A
+
+[paas@paas-bootstrap ~]$ ssh agent-3.node.ref-arq.paas.labs.platformprovider.com
+
+[paas@paas-private1 ~]$ sudo docker images
+REPOSITORY                                                      TAG                 IMAGE ID            CREATED             SIZE
+...
+paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp           latest              ef5f8601aca5        6 weeks ago         438.6 MB
+...
+
+[paas@paas-private1 ~]$ sudo docker ps
+CONTAINER ID        IMAGE                                                          COMMAND                  CREATED              STATUS              PORTS               NAMES
+d8fc186d2ff7        mesosphere/jenkins:3.0.3-2.32.3                                "/bin/tini -- /usr/lo"   About a minute ago   Up About a minute                       mesos-c1ea976f-9a11-4395-ba58-34549794cfd8-S1.960fd6ff-1ff2-4e47-802f-df4a890d594c
+ffdc180b872c        paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp:latest   "/bin/sh -c '/run.sh "   7 minutes ago        Up 7 minutes                            mesos-c1ea976f-9a11-4395-ba58-34549794cfd8-S1.e8902799-e34d-4f20-b75f-262fcb50c82c
+----
+
+* Dammos de alta a un usuario:
+
+[source]
+----
+[paas@paas-private1 ~]$ sudo docker exec -it ffdc180b872c /bin/bash
+
+root@paas-private1:/# pure-pw useradd arturo -f /etc/pure-ftpd/passwd/pureftpd.passwd -m -u ftpuser -d /home/ftpusers/arturo
+Password:
+Enter it again:
+----
+
+* Verificamos que el servidor ftp es accesible desde el agente privado del PaaS, para asegurarnos de que también va a serlo
+desde cualquier otra máquina que esté desplegada en ese universo:
+
+[source]
+----
+
+[paas@paas-private1 ~]$ ftp -p 10.5.139.163 21
+Connected to 10.5.139.163 (10.5.139.163).
+220---------- Welcome to Pure-FTPd [privsep] [TLS] ----------
+220-You are user number 1 of 5 allowed.
+220-Local time is now 11:57. Server port: 21.
+220-This is a private system - No anonymous login
+220-IPv6 connections are also welcome on this server.
+220 You will be disconnected after 15 minutes of inactivity.
+Name (10.5.139.163:paas): arturo
+331 User arturo OK. Password required
+Password:
+230 OK. Current directory is /
+Remote system type is UNIX.
+Using binary mode to transfer files.
+
+ftp> ls
+227 Entering Passive Mode (23,21,179,138,117,53)
+----
+
+WARNING: El servidor de ftp está permitiendo autenticar, pero no permite listar su contenido.
+TENGO QUE REVISAR LA INSTALACIÓN DEL SERVIDOR FTP ALGUIEN DE SISTEMAS (JAVI CORTEJOSO, UNAI)
+
+
+1) Construir el jar incluyendo en el mismo las dependencias y generando la imagen de Docker en el repositorio local Docker
+de mi portátil
+
+[source]
+----
+$ ~/watersupply/lecturas$ mvn clean compile package install docker:build
+
+$ ~/watersupply/lecturas$ docker images
+REPOSITORY                                                                 TAG                 IMAGE ID            CREATED             SIZE
+watersupply/lecturas                                                             1.0-SNAPSHOT        6c1acf2d095b        11 seconds ago      166.8 MB
+watersupply/lecturas                                                             latest              6c1acf2d095b        11 seconds ago      166.8 MB
+
+----
+
+2) Etiquetar la imagen hacer push
+
+[source]
+----
+$ watersupply/lecturas$ mvn docker:tag -DpushImage
+[INFO] Scanning for projects...
+[INFO]
+[INFO] ------------------------------------------------------------------------
+[INFO] Building lecturas 1.0-SNAPSHOT
+[INFO] ------------------------------------------------------------------------
+[INFO]
+[INFO] --- docker-maven-plugin:0.4.11:tag (default-cli) @ lecturas ---
+[INFO] Creating tag paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT from watersupply/lecturas
+[INFO] Pushing paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT
+The push refers to a repository [paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas]
+dddc0af5f878: Pushed
+762ef51d068e: Pushed
+9fb47a39a6af: Layer already exists
+dcf909146faa: Layer already exists
+23b9c7b43573: Layer already exists
+1.0-SNAPSHOT: digest: sha256:8938196372e08160bd733cb772a6771d2cf58c36d20b9932e381570da8e57944 size: 1377
+null: null
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time: 04:00 min
+[INFO] Finished at: 2017-05-05T14:42:53+02:00
+[INFO] Final Memory: 25M/241M
+[INFO] ------------------------------------------------------------------------
+
+
+$ ~/watersupply/lecturas$ sudo docker images
+REPOSITORY                                                                 TAG                 IMAGE ID            CREATED             SIZE
+watersupply/lecturas                                                             1.0-SNAPSHOT        34d20dbcaa2e        2 minutes ago       483.6 MB
+watersupply/lecturas                                                             latest              34d20dbcaa2e        2 minutes ago       483.6 MB
+paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas                 1.0-SNAPSHOT        34d20dbcaa2e        2 minutes ago       483.6 MB
+
+----
+
+4) Verificar que la imagen se ha subido al Registry que tenemos en la máquina bootstrap:
+
+[source]
+----
+$ curl -X GET  http://paas-bootstrap.ref-arq.lab.platformprovider.com:5000/v2/_catalog
+{"repositories":["contenedorpruebas","helloworld","watersupply/lecturas","watersupply/lecturas-ms","watersupply/lecturas"]}
+
+$ curl -X GET  http://paas-bootstrap.ref-arq.lab.platformprovider.com:5000/v2/watersupply/lecturas/tags/list
+{"name":"watersupply/lecturas","tags":["latest"]}
+
+$ curl -X GET  http://paas-bootstrap.ref-arq.lab.platformprovider.com:5000/v2/_catalog
+{"repositories":["contenedorpruebas","helloworld","watersupply/ftp","watersupply/lecturas","watersupply/lecturas-ms","watersupply/lecturasv1"]}
+
+$ curl -X GET  http://paas-bootstrap.ref-arq.lab.platformprovider.com:5000/v2/watersupply/lecturas/tags/list
+{"name":"watersupply/lecturas","tags":["1.0-SNAPSHOT"]}
+
+----
+
+5) Eliminar la imagen antigua y sus ejecuciones, para permitir que se vuelva a instanciar un nuevo contenedor
+
+
+[source]
+----
+
+$ ssh paas@paas-bootstrap.ref-arq.lab.platformprovider.com -i /home/atarin/.ssh/id_rsa.paas -A
+
+[paas@paas-bootstrap ~]$ ssh agent-3.node.ref-arq.paas.labs.platformprovider.com
+
+[paas@paas-private1 ~]$ sudo docker images
+REPOSITORY                                                      TAG                 IMAGE ID            CREATED             SIZE
+paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas      1.0-SNAPSHOT        34d20dbcaa2e        3 days ago          483.6 MB
+...
+
+[paas@paas-private1 ~]$ for i in `sudo docker ps -a | grep watersupply/lecturas | awk '{ print $1  }'`; do sudo docker rm $i; done
+
+[paas@paas-private1 ~]$ sudo docker rmi 34d20dbcaa2e
+----
+
+WARNING: Si no se hace así, DC/OS no permite planificar un job con una imagen moderna.
+
+6) Planificar un job con la imagen que acabamos de subir:
+
+[source]
+----
+https://master-1.node.ref-arq.paas.labs.platformprovider.com   >  Jobs  > Image: "paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT"
+
+{
+  "id": "procesarficherosftp",
+  "description": "Este job procesa cada cinco minutos las lecturas ubicadas en el servidor paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/ftp:latest y deposita el serultado en una cola de Kafka y en un microservicio",
+  "run": {
+    "cmd": "echo date >> /tmp/lanzamiento.txt\n",
+    "cpus": 0.01,
+    "mem": 32,
+    "disk": 0,
+    "docker": {
+      "image": "paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT"
+    }
+  },
+  "schedules": [
+    {
+      "id": "default",
+      "enabled": true,
+      "cron": "5,10,15,20,25,30,35,40,45,50,55 * * * *",
+      "timezone": "Europe/Madrid",
+      "concurrencyPolicy": "ALLOW",
+      "startingDeadlineSeconds": 5
+    }
+  ]
+}
+
+
+----
+
+7) Verificar que el servicio ha creado una imagen en el agente privado:
+
+[source]
+----
+
+$ ssh paas@paas-bootstrap.ref-arq.lab.platformprovider.com -i /home/atarin/.ssh/id_rsa.paas -A
+
+[paas@paas-bootstrap ~]$ ssh agent-3.node.ref-arq.paas.labs.platformprovider.com
+
+[paas@paas-private1 ~]$ sudo docker images
+
+REPOSITORY                                                      TAG                 IMAGE ID            CREATED             SIZE
+paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas      1.0-SNAPSHOT        34d20dbcaa2e        24 minutes ago      483.6 MB
+
+----
+
+8) Verificamos que el job se ha ejecutado con éxito:
+
+Hay distintos sitios donde se puede ver:
+
+[source]
+----
+
+https://master-1.node.ref-arq.paas.labs.platformprovider.com   >  Jobs
+
+https://master-1.node.ref-arq.paas.labs.platformprovider.com/mesos/#/agents  > Metronome > Ver logs
+
+
+I0505 13:07:14.075368 21050 exec.cpp:161] Version: 1.0.1
+I0505 13:07:14.084460 21062 exec.cpp:236] Executor registered on agent c1ea976f-9a11-4395-ba58-34549794cfd8-S1
+I0505 13:07:14.086293 21057 docker.cpp:815] Running docker -H unix:///var/run/docker.sock run --cpu-shares 10 --memory 33554432 -e MARATHON_APP_VERSION=1970-01-01T00:00:00.000Z -e HOST=10.5.139.163 -e MARATHON_APP_RESOURCE_CPUS=0.01 -e MARATHON_APP_DOCKER_IMAGE=paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT -e MESOS_TASK_ID=procesarficherosftp_20170505130713L88A1.c1b753c1-3193-11e7-8193-feac10d50ce3 -e MARATHON_APP_RESOURCE_MEM=32.0 -e MARATHON_APP_RESOURCE_DISK=0.0 -e MARATHON_APP_LABELS= -e MARATHON_APP_ID=/procesarficherosftp/20170505130713L88A1 -e LIBPROCESS_IP=10.5.139.163 -e MESOS_SANDBOX=/mnt/mesos/sandbox -e MESOS_CONTAINER_NAME=mesos-c1ea976f-9a11-4395-ba58-34549794cfd8-S1.d5d8613d-348a-4f86-8958-cd6c56784d1b -v /var/lib/mesos/slave/slaves/c1ea976f-9a11-4395-ba58-34549794cfd8-S1/frameworks/c1ea976f-9a11-4395-ba58-34549794cfd8-0001/executors/procesarficherosftp_20170505130713L88A1.c1b753c1-3193-11e7-8193-feac10d50ce3/runs/d5d8613d-348a-4f86-8958-cd6c56784d1b:/mnt/mesos/sandbox --net host --entrypoint /bin/sh --name mesos-c1ea976f-9a11-4395-ba58-34549794cfd8-S1.d5d8613d-348a-4f86-8958-cd6c56784d1b paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT -c
+
+/bin/sh:  : not found
+d
+
+[paas@paas-private1 ~]$ sudo docker ps -a
+CONTAINER ID        IMAGE                                                                     COMMAND                  CREATED             STATUS                        PORTS               NAMES
+04d8994d8099        paas-bootstrap.ref-arq.lab.platformprovider.com:5000/watersupply/lecturas:1.0-SNAPSHOT   "/bin/sh -c 'echo dat"   4 minutes ago       Exited (0) 4 minutes ago                          mesos-c1ea976f-9a11-4395-ba58-34549794cfd8-S1.c6c66863-8101-47a7-90ef-21eeeaebecdb
+
+[paas@paas-private1 ~]$ sudo docker logs 04d8994d8099
+/bin/sh:  : not found
+
+----
+
+WARNING: Es necesario solucionar el problema del servidor FTP para que esta máquina funcione correctamente. También es necesario dar de alta y configurar correctamente los servidores de Postgres, Kafka y HDFS en el agente privado.

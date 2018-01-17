@@ -1,0 +1,118 @@
+# http://docs.spring.io/autorepo/docs/spring-cloud-stream-binder-kafka-docs/1.1.0.BUILD-SNAPSHOT/reference/htmlsingle/#_example_security_configuration
+# http://docs.confluent.io/current/kafka/ssl.html
+# https://github.com/spring-cloud/spring-cloud-stream-binder-kafka/blob/master/spring-cloud-stream-binder-kafka-docs/src/main/asciidoc/overview.adoc
+# https://github.com/spring-cloud/spring-cloud-stream-samples/blob/master/multi-io/src/main/resources/application.yml
+
+spring:
+  datasource:
+    # IPs en Google Cloud: http://master-1.node.watersupply.labs.platformprovider.com:8123/v1/enumerate
+    url: jdbc:postgresql://172.31.128.10:1026/postgres?user=postgres&password=&stringtype=varchar&connectTimeout=5000
+
+    # IP Docker local
+    # url: jdbc:postgresql://172.17.0.2:5432/postgres?user=postgres&password=&stringtype=varchar
+
+    # Para que continúe el arranque de la aplicación si falla la ejecución de las ddls de inicialización
+    # de schema.sql
+    continue-on-error: true
+  cloud:
+    stream:
+      kafka:
+        binder:
+         # configuration:
+         #    security:
+         #      protocol: SSL
+         #    ssl:
+         #      truststore:
+         #        location: /kafka-server-trustore.jks
+         #        password: c4_trust_d3f4ult_k3yst0r3
+         #      keystore:
+         #        location: /client_kafka.jks
+         #        password: br0k3r_0_c0nflu3nt_k4fk4_s3c
+          autoCreateTopics: false
+          autoAddPartitions: false
+      default-binder: output
+      bindings:
+        output:
+          destination: lecturas
+          content-type: application/json
+        input:
+          destination: lecturas
+          content-type: application/json
+        output1:
+          destination: topologias
+          content-type: application/json
+        input1:
+          destination: topologias
+          content-type: application/json
+      binders:
+        output:
+         type: kafka
+         environment:
+           spring:
+             cloud:
+               stream:
+                kafka:
+                  binder:
+                    # IPs en Docker local
+                    # brokers: 172.17.0.4:9092
+                    # zkNodes: 172.17.0.4:2181
+
+                    # IPs en Google Cloud: http://master-1.node.watersupply.labs.platformprovider.com:8123/v1/enumerate
+                    # brokers: confluent-kafka-sec.marathon.l4lb.thisdcos.directory:9092
+                    # Ips en Exhibitor de Zookeeper
+                    brokers: broker-2.confluent-kafka-sec.mesos:9092
+                    zkNodes: master.mesos:2181/dcos-service-confluent-kafka-sec
+        input:
+         type: kafka
+         environment:
+           spring:
+             cloud:
+               stream:
+                 kafka:
+                   binder:
+                    # IPs en Docker local
+                    # brokers: 172.17.0.4:9092
+                    # zkNodes: 172.17.0.4:2181
+
+                    # IPs en Google Cloud: http://master-1.node.watersupply.labs.platformprovider.com:8123/v1/enumerate
+                    # brokers: confluent-kafka-sec.marathon.l4lb.thisdcos.directory:9092
+                    # Ips en Exhibitor de Zookeeper
+                    brokers: broker-2.confluent-kafka-sec.mesos:9092
+                    zkNodes: master.mesos:2181/dcos-service-confluent-kafka-sec
+        output1:
+         type: kafka
+         environment:
+           spring:
+             cloud:
+               stream:
+                kafka:
+                  binder:
+                    # IPs en Docker local
+                    # brokers: 172.17.0.4:9092
+                    # zkNodes: 172.17.0.4:2181
+
+                    # IPs en Google Cloud: http://master-1.node.watersupply.labs.platformprovider.com:8123/v1/enumerate
+                    # brokers: confluent-kafka-sec.marathon.l4lb.thisdcos.directory:9092
+                    # Ips en Exhibitor de Zookeeper
+                    brokers: broker-2.confluent-kafka-sec.mesos:9092
+                    zkNodes: master.mesos:2181/dcos-service-confluent-kafka-sec
+        input1:
+         type: kafka
+         environment:
+           spring:
+             cloud:
+               stream:
+                 kafka:
+                   binder:
+                    # IPs en Docker local
+                    # brokers: 172.17.0.4:9092
+                    # zkNodes: 172.17.0.4:2181
+
+                    # IPs en Google Cloud: http://master-1.node.watersupply.labs.platformprovider.com:8123/v1/enumerate
+                    # brokers: confluent-kafka-sec.marathon.l4lb.thisdcos.directory:9092
+                    # Ips en Exhibitor de Zookeeper
+                    brokers: broker-2.confluent-kafka-sec.mesos:9092
+                    zkNodes: master.mesos:2181/dcos-service-confluent-kafka-sec
+# Todavía no he conseguido que las topologías vayan a su propio tópico 'topologias'
+# Repasar este ejemplo:
+# https://github.com/spring-cloud/spring-cloud-stream-samples/blob/master/multi-io/src/main/java/demo/SampleSink.java
