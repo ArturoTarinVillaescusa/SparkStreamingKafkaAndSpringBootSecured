@@ -1,9 +1,5 @@
 #!/bin/bash
 
-################################################################################
-########              PlatformProvider Inc. All Rights Reserved                  ########
-########         author: Carlos Gomez <carlos.gomez@platformprovider.com>        ########
-################################################################################
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 #@@@@    Note all this functions expects the following vars as globals   @@@@@@@
